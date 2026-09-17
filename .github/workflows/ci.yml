@@ -91,23 +91,26 @@ jobs:
         env:
           RUSTFLAGS: -Dwarnings
 
+  # Formatting is checked with the nightly rustfmt the OP monorepo pins
+  # (scripts/mega/rustfmt-nightly.txt): rustfmt.toml uses nightly-only options,
+  # and the pinned stable rustfmt would reformat upstream code the fork must
+  # not touch. rust-toolchain.toml still pins the compiler for every other job.
   fmt:
     name: fmt
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Read the pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - name: Read the rustfmt nightly
+        id: nightly
+        run: echo "toolchain=$(tr -d '[:space:]' < scripts/mega/rustfmt-nightly.txt)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ steps.rust.outputs.channel }}
+          toolchain: ${{ steps.nightly.outputs.toolchain }}
           components: rustfmt
-      - run: cargo fmt --all --check
-
+      - run: cargo +${{ steps.nightly.outputs.toolchain }} fmt --all --check
 
   ci-success:
     name: ci success
