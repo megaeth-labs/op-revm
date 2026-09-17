@@ -466,101 +466,249 @@ mod tests {
         *exec_result.gas()
     }
 
-    /// Like [`call_last_frame_return`], but wraps the result in a top-level CREATE frame.
+    /// Gas limit of the CREATE transactions below.
+    const CREATE_TX_GAS_LIMIT: u64 = 1_000_000;
+    /// Upfront CREATE state gas under the Amsterdam gas params.
+    const CREATE_STATE_GAS: u64 = 183_600;
+    /// Initial reservoir that covers the upfront CREATE charge with 50 to spare.
+    const RESERVOIR_COVERING_CHARGE: u64 = CREATE_STATE_GAS + 50;
+    /// Initial reservoir that covers only 50 of the upfront CREATE charge; the rest of the
+    /// charge spills into regular gas.
+    const RESERVOIR_SHORT_OF_CHARGE: u64 = 50;
+    /// Regular gas spent by [`spend_init_code_gas`].
+    const INIT_CODE_REGULAR_GAS: u64 = 10;
+    /// State gas charged by [`spend_init_code_gas`].
+    const INIT_CODE_STATE_GAS: u64 = 30;
+    /// Address a CREATE frame deploys to.
+    const CREATED_ADDRESS: Address = Address::with_last_byte(0xcc);
+
+    /// Deployment target account of a CREATE transaction, as `create_init_frame` loads it.
+    #[derive(Clone, Copy)]
+    enum CreateTarget {
+        /// Empty (no nonce, balance or code): under EIP-2780 the upfront state gas is charged.
+        Empty,
+        /// Not empty (e.g. pre-funded): nothing is charged upfront.
+        NonEmpty,
+    }
+
+    /// A CREATE transaction with gas limit [`CREATE_TX_GAS_LIMIT`].
+    fn create_tx_ctx(cfg: CfgEnv<OpSpecId>) -> OpContext<EmptyDB> {
+        Context::op()
+            .with_tx(
+                OpTransaction::builder()
+                    .base(TxEnv::builder().create().gas_limit(CREATE_TX_GAS_LIMIT))
+                    .build_fill(),
+            )
+            .with_cfg(cfg)
+    }
+
+    /// Records the gas the fixture init code costs: [`INIT_CODE_REGULAR_GAS`] and
+    /// [`INIT_CODE_STATE_GAS`].
+    fn spend_init_code_gas(gas: &mut Gas) {
+        assert!(gas.record_regular_cost(INIT_CODE_REGULAR_GAS));
+        assert!(gas.record_state_cost(INIT_CODE_STATE_GAS));
+    }
+
+    /// Settles a top-level CREATE frame into the transaction-level gas the fork builds for it,
+    /// applies [`OpHandler::refund`], and returns the settled gas.
+    ///
+    /// The transaction-level gas starts with `reservoir` state gas and the rest of the gas
+    /// limit as regular gas, chosen directly rather than derived from intrinsic gas and the
+    /// gas limit cap as `Handler::tx_gas` does, to keep the numbers readable. As in
+    /// `create_init_frame`, when EIP-2780 is enabled and the target is empty, the upfront
+    /// `create_state_gas` is recorded on that tracker (reservoir first, the rest spilling into
+    /// regular gas) and the outcome carries `charged_create_state_gas`. The frame is forwarded
+    /// the regular gas and reservoir left after the charge. A frame created at `address` runs
+    /// [`spend_init_code_gas`]; an outcome without an address is an early exit (e.g. caller nonce
+    /// overflow) that returns its forwarded gas untouched.
     fn create_last_frame_return(
         ctx: OpContext<EmptyDB>,
+        reservoir: u64,
+        target: CreateTarget,
         instruction_result: InstructionResult,
-        gas: Gas,
+        address: Option<Address>,
     ) -> Gas {
         let gas_limit = ctx.tx().gas_limit();
-        let mut evm = ctx.build_op();
+        let mut parent_gas = GasTracker::new(gas_limit, gas_limit - reservoir, reservoir);
+        let charged_create_state_gas =
+            ctx.cfg().is_amsterdam_eip2780_enabled() && matches!(target, CreateTarget::Empty);
+        if charged_create_state_gas {
+            assert!(parent_gas.record_state_cost(ctx.cfg().gas_params().create_state_gas()));
+        }
 
+        let mut gas =
+            Gas::new_with_regular_gas_and_reservoir(parent_gas.remaining(), parent_gas.reservoir());
+        if address.is_some() {
+            spend_init_code_gas(&mut gas);
+        }
         let mut outcome = CreateOutcome::new(
             InterpreterResult { result: instruction_result, output: Bytes::new(), gas },
-            instruction_result.is_ok().then_some(Address::ZERO),
+            address,
         );
-        // EIP-2780/#3795: the upfront CREATE state-gas charge is now reported by
-        // the outcome flag instead of being re-derived from the EIP-8037 cfg flag.
-        outcome.charged_create_state_gas = true;
+        outcome.charged_create_state_gas = charged_create_state_gas;
         let mut exec_result = FrameResult::Create(outcome);
 
+        let mut evm = ctx.build_op();
         let mut handler =
             OpHandler::<_, EVMError<_, OpTransactionError>, EthFrame<EthInterpreter>>::new();
 
-        let mut parent_gas = GasTracker::new(gas_limit, gas_limit, 0);
         handler.last_frame_result(&mut evm, &mut exec_result, &mut parent_gas).unwrap();
         handler.refund(&mut evm, &mut exec_result, 0).unwrap();
         *exec_result.gas()
     }
 
-    /// Cfg on the newest OP fork with EIP-8037 (Amsterdam) state gas enabled and the
-    /// matching gas params — an Amsterdam analog would activate on top of an upcoming fork.
+    /// Gas the transaction is charged before refunds, as post-execution computes it: the limit
+    /// minus unused regular gas and unused reservoir.
+    fn tx_gas_spent(gas: &Gas) -> u64 {
+        post_execution::build_result_gas(false, gas, InitialAndFloorGas::new(0, 0))
+            .total_gas_spent()
+    }
+
+    /// Cfg on the newest OP fork with the Amsterdam state-gas EIPs enabled (EIP-8037 state gas,
+    /// and EIP-2780, under which a CREATE transaction to an empty target is charged the upfront
+    /// `create_state_gas` before its first frame is built) and the matching gas params — an
+    /// Amsterdam analog would activate on top of an upcoming fork.
     fn amsterdam_cfg() -> CfgEnv<OpSpecId> {
-        let mut cfg = CfgEnv::new_with_spec(OpSpecId::KARST).with_enable_amsterdam_eip8037(true);
+        let mut cfg = CfgEnv::new_with_spec(OpSpecId::KARST)
+            .with_enable_amsterdam_eip8037(true)
+            .with_enable_amsterdam_eip2780(true);
         cfg.set_gas_params(GasParams::new_spec(SpecId::AMSTERDAM));
+        assert_eq!(cfg.gas_params().create_state_gas(), CREATE_STATE_GAS);
         cfg
     }
 
-    /// Gas as a frame might leave it: limit 100 with 10 regular gas spent, and 30 state
-    /// gas charged against an initial reservoir of 50.
-    fn gas_with_state_usage() -> Gas {
-        let mut gas = Gas::new_with_regular_gas_and_reservoir(100, 50);
-        assert!(gas.record_regular_cost(10));
-        assert!(gas.record_state_cost(30));
-        assert_eq!(gas.reservoir(), 20);
-        assert_eq!(gas.state_gas_spent(), 30);
-        gas
+    #[rstest]
+    #[case::charged_from_reservoir(RESERVOIR_COVERING_CHARGE)]
+    #[case::charge_spilled_into_regular_gas(RESERVOIR_SHORT_OF_CHARGE)]
+    fn test_failed_create_refills_reservoir_with_create_state_gas(#[case] reservoir: u64) {
+        let gas = create_last_frame_return(
+            create_tx_ctx(amsterdam_cfg()),
+            reservoir,
+            CreateTarget::Empty,
+            InstructionResult::Revert,
+            Some(CREATED_ADDRESS),
+        );
+        // The frame rolls back its own state gas and returns its unused regular gas. The
+        // upfront charge lives on the transaction-level gas, and the outcome carries
+        // `charged_create_state_gas`, so settlement refunds it: the spilled part goes back to
+        // regular gas, the rest to the reservoir. Both pools end where the transaction started,
+        // less the init code's regular gas.
+        assert_eq!(gas.remaining(), CREATE_TX_GAS_LIMIT - reservoir - INIT_CODE_REGULAR_GAS);
+        assert_eq!(gas.reservoir(), reservoir);
+        // The refund cancels the recorded charge.
+        assert_eq!(gas.state_gas_spent(), 0);
+        assert_eq!(tx_gas_spent(&gas), INIT_CODE_REGULAR_GAS);
+        assert_eq!(gas.refunded(), 0);
+    }
+
+    #[rstest]
+    #[case::charged_from_reservoir(RESERVOIR_COVERING_CHARGE)]
+    #[case::charge_spilled_into_regular_gas(RESERVOIR_SHORT_OF_CHARGE)]
+    fn test_halted_create_refunds_charged_create_state_gas_then_consumes_regular_gas(
+        #[case] reservoir: u64,
+    ) {
+        let gas = create_last_frame_return(
+            create_tx_ctx(amsterdam_cfg()),
+            reservoir,
+            CreateTarget::Empty,
+            InstructionResult::OutOfGas,
+            Some(CREATED_ADDRESS),
+        );
+        // The recorded charge is refunded as on revert, but the exceptional halt then consumes
+        // all regular gas, including the spilled part the refund just returned. Only the
+        // reservoir comes back, and it ends where the transaction started.
+        assert_eq!(gas.remaining(), 0);
+        assert_eq!(gas.reservoir(), reservoir);
+        assert_eq!(gas.state_gas_spent(), 0);
+        assert_eq!(tx_gas_spent(&gas), CREATE_TX_GAS_LIMIT - reservoir);
+        assert_eq!(gas.refunded(), 0);
     }
 
     #[test]
-    fn test_failed_create_refills_reservoir_with_create_state_gas() {
-        let cfg = amsterdam_cfg();
-        let create_state_gas = cfg.gas_params().create_state_gas();
-        assert!(create_state_gas > 0, "create_state_gas must be nonzero for this test to bite");
-
-        let ctx = Context::op()
-            .with_tx(OpTransaction::builder().base(TxEnv::builder().gas_limit(100)).build_fill())
-            .with_cfg(cfg);
-
-        let gas = create_last_frame_return(ctx, InstructionResult::Revert, gas_with_state_usage());
-        // Unused regular gas is returned on revert.
-        assert_eq!(gas.remaining(), 90);
-        assert_eq!(gas.total_gas_spent(), 10);
-        // State changes rolled back: the pre-tx reservoir (50 = 20 + 30 spent state gas) is
-        // recovered, and the intrinsic `create_state_gas` charged at tx entry is refunded on
-        // top because the top-level CREATE failed (EIP-8037).
-        assert_eq!(gas.reservoir(), 50 + create_state_gas);
-        // `refill_reservoir` books the refund as negative state gas spent; the post-execution
-        // accounting reconciles it against the intrinsic charge.
-        assert_eq!(gas.state_gas_spent(), -(create_state_gas as i64));
+    fn test_failed_create_without_charged_create_state_gas_refunds_nothing() {
+        let reservoir = 50;
+        let gas = create_last_frame_return(
+            create_tx_ctx(amsterdam_cfg()),
+            reservoir,
+            CreateTarget::NonEmpty,
+            InstructionResult::Revert,
+            Some(CREATED_ADDRESS),
+        );
+        // The Amsterdam EIPs are enabled, but the target was not empty: nothing was charged
+        // upfront and `charged_create_state_gas` is false. Settlement follows that flag, not the
+        // cfg, so the frame's rollback restores the reservoir and no `create_state_gas` is added.
+        assert_eq!(gas.remaining(), CREATE_TX_GAS_LIMIT - reservoir - INIT_CODE_REGULAR_GAS);
+        assert_eq!(gas.reservoir(), reservoir);
+        assert_eq!(gas.state_gas_spent(), 0);
+        assert_eq!(tx_gas_spent(&gas), INIT_CODE_REGULAR_GAS);
     }
 
     #[test]
     fn test_failed_create_without_eip8037_only_recovers_reservoir() {
-        let ctx = Context::op()
-            .with_tx(OpTransaction::builder().base(TxEnv::builder().gas_limit(100)).build_fill())
-            .with_cfg(CfgEnv::new_with_spec(OpSpecId::KARST));
-
-        let gas = create_last_frame_return(ctx, InstructionResult::Revert, gas_with_state_usage());
-        assert_eq!(gas.remaining(), 90);
-        assert_eq!(gas.total_gas_spent(), 10);
-        // No EIP-8037: the pre-tx reservoir is recovered, but no create_state_gas refund.
-        assert_eq!(gas.reservoir(), 50);
+        let reservoir = 50;
+        let gas = create_last_frame_return(
+            create_tx_ctx(CfgEnv::new_with_spec(OpSpecId::KARST)),
+            reservoir,
+            CreateTarget::Empty,
+            InstructionResult::Revert,
+            Some(CREATED_ADDRESS),
+        );
+        assert_eq!(gas.remaining(), CREATE_TX_GAS_LIMIT - reservoir - INIT_CODE_REGULAR_GAS);
+        assert_eq!(tx_gas_spent(&gas), INIT_CODE_REGULAR_GAS);
+        // No Amsterdam EIPs: nothing is charged upfront even for an empty target, so the
+        // frame's rollback recovers the reservoir and there is no create_state_gas refund.
+        assert_eq!(gas.reservoir(), reservoir);
         assert_eq!(gas.state_gas_spent(), 0);
     }
 
-    #[test]
-    fn test_successful_create_keeps_state_gas_spent() {
-        let ctx = Context::op()
-            .with_tx(OpTransaction::builder().base(TxEnv::builder().gas_limit(100)).build_fill())
-            .with_cfg(amsterdam_cfg());
+    #[rstest]
+    #[case::charged_from_reservoir(RESERVOIR_COVERING_CHARGE)]
+    #[case::charge_spilled_into_regular_gas(RESERVOIR_SHORT_OF_CHARGE)]
+    fn test_create_ok_without_address_refunds_charged_create_state_gas(#[case] reservoir: u64) {
+        // Caller nonce overflow: the CREATE exits with `Return` and no address before the frame
+        // runs.
+        let gas = create_last_frame_return(
+            create_tx_ctx(amsterdam_cfg()),
+            reservoir,
+            CreateTarget::Empty,
+            InstructionResult::Return,
+            None,
+        );
+        // Nothing was deployed, so the recorded charge is refunded although the result is OK:
+        // the transaction spends nothing and both pools end where it started.
+        assert_eq!(gas.remaining(), CREATE_TX_GAS_LIMIT - reservoir);
+        assert_eq!(gas.reservoir(), reservoir);
+        assert_eq!(gas.state_gas_spent(), 0);
+        assert_eq!(tx_gas_spent(&gas), 0);
+    }
 
-        let gas = create_last_frame_return(ctx, InstructionResult::Return, gas_with_state_usage());
-        assert_eq!(gas.remaining(), 90);
-        assert_eq!(gas.total_gas_spent(), 10);
-        // Success: state gas was genuinely consumed — no recovery, no refill.
-        assert_eq!(gas.reservoir(), 20);
-        assert_eq!(gas.state_gas_spent(), 30);
+    #[rstest]
+    // Reservoir-funded: 1_000_000 - 183_650 regular gas less the init code's 10, and the 50
+    // spare reservoir less the init code's 30.
+    #[case::charged_from_reservoir(RESERVOIR_COVERING_CHARGE, 816_340, 20)]
+    // Spilled: 1_000_000 - 50 regular gas less the charge's 183_550 spill and the init code's 10
+    // regular and 30 spilled state gas.
+    #[case::charge_spilled_into_regular_gas(RESERVOIR_SHORT_OF_CHARGE, 816_360, 0)]
+    fn test_successful_create_keeps_state_gas_spent(
+        #[case] reservoir: u64,
+        #[case] remaining_left: u64,
+        #[case] reservoir_left: u64,
+    ) {
+        let gas = create_last_frame_return(
+            create_tx_ctx(amsterdam_cfg()),
+            reservoir,
+            CreateTarget::Empty,
+            InstructionResult::Return,
+            Some(CREATED_ADDRESS),
+        );
+        // A deployment keeps the upfront charge and the init code's state gas, both paid from
+        // the reservoir first and then from regular gas. Nothing is refunded.
+        let state_gas = CREATE_STATE_GAS + INIT_CODE_STATE_GAS;
+        assert_eq!(gas.state_gas_spent(), state_gas as i64);
+        assert_eq!(gas.remaining(), remaining_left);
+        assert_eq!(gas.reservoir(), reservoir_left);
+        assert_eq!(tx_gas_spent(&gas), INIT_CODE_REGULAR_GAS + state_gas);
+        assert_eq!(gas.refunded(), 0);
     }
 
     #[test]

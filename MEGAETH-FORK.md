@@ -8,7 +8,7 @@ The crate name and version stay `op-revm 20.0.0`; consumers switch to the fork t
 ## Why a fork
 
 MegaETH's execution engine runs on the [MegaETH fork of revm](https://github.com/megaeth-labs/revm), which carries the revm 43 gas core on top of revm 40.0.3.
-That gas core changed the shape of three `Handler` methods that `OpHandler` overrides, and the monorepo copy of `op-revm` pins an older revm with no port.
+That gas core changed the shape of two `Handler` methods that `OpHandler` overrides (`last_frame_result` and `refund`) and the signature of `Gas::set_final_refund`, which the `refund` override calls; the monorepo copy of `op-revm` pins an older revm with no port.
 The crates.io package `op-revm 20.0.0` is a different package under the same name and version (published from an older monorepo commit, depends on revm 38, maps `INTEROP` to `PRAGUE`) and is not compatible either.
 This fork is the monorepo copy plus that port, and nothing else: MegaETH logic stays in `mega-evm`.
 
