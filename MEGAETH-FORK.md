@@ -43,7 +43,8 @@ The baseline moves when `mega-reth` moves its OP monorepo revision.
 3. **Cargo versions never change.**
    `[patch]` only applies when the patched version satisfies the consumer's requirement.
    Releases are identified by git tags only.
-4. **Commit prefix `mega:`, one commit per topic; snapshot commits start with `Mirror op-revm@`.**
+4. **Conventional commit prefixes, one commit per topic; snapshot commits start with `Mirror op-revm@`.**
+   Fork commits and pull request titles use the usual prefixes (`feat`, `fix`, `chore`, `docs`, `ci`, `test`) that say what changed.
    Every upstream file the fork edits has a row in the "Upstream touch points" table below.
 5. **`no_std` is mandatory.**
    The crate must keep building for `riscv32imac-unknown-none-elf` and `riscv64imac-unknown-none-elf` with `--no-default-features`.
@@ -91,7 +92,7 @@ op-revm = { git = "https://github.com/megaeth-labs/op-revm", tag = "v20.0.0-mega
 1. Produce the snapshot tree from a monorepo clone at the new revision: `scripts/mega/mirror.sh <clone> <rev> <dir>`.
 2. Replace the crate files in a working tree with that tree (everything except the fork-owned files listed in `scripts/mega/check-touch-points.sh`) and commit it as `Mirror op-revm@<short> from ethereum-optimism/optimism`, with the full commit id, date and crate version in the body.
    Update `scripts/mega/base.txt`, the baseline table above and `PROVENANCE.md` in the same commit.
-3. Re-apply every touch-point row on top, one `mega:` commit each, following the rules in the table.
+3. Re-apply every touch-point row on top, one commit each, following the rules in the table.
 4. Before opening the PR, run `scripts/mega/check-mirror.sh <clone>` and `scripts/mega/check-touch-points.sh <snapshot> HEAD`; paste both results into the PR.
 5. Tag a release.
 

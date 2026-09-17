@@ -14,7 +14,7 @@ This repository is MegaETH's fork of the `op-revm` crate, taken from `rust/op-re
 4. **`no_std`.** No unguarded `std::`, no new dependency that enables `std` by default.
    CI checks both riscv targets; the reviewer checks the intent.
 5. **One revm fork commit.** The `rev` in `.cargo/config.toml` is the only place that names the revm fork commit; a port PR bumps it in the same commit as the code it requires.
-6. **One topic per PR, `mega:` prefix on every fork commit.** `git log --oneline <snapshot>..main` is the fork's changelog and must stay readable; snapshot commits are the exception and start with `Mirror op-revm@`.
+6. **One topic per PR, conventional prefix on every fork commit.** Commit and PR titles start with `feat`, `fix`, `chore`, `docs`, `ci` or `test` and say what changed; `git log --oneline <snapshot>..main` is the fork's changelog and must stay readable; snapshot commits are the exception and start with `Mirror op-revm@`.
 
 ## By kind of change
 
