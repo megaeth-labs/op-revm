@@ -12,7 +12,7 @@ use revm::{
         result::InvalidTransaction,
     },
     context_interface::{
-        Block, Cfg, ContextTr, JournalTr, Transaction,
+        Block, Cfg, ContextTr, Host, JournalTr, Transaction,
         cfg::gas::GasTracker,
         context::take_error,
         result::{EVMError, ExecutionResult, FromStringError, ResultGas},
@@ -29,7 +29,7 @@ use revm::{
     interpreter::{InitialAndFloorGas, interpreter::EthInterpreter, interpreter_action::FrameInit},
     primitives::U256,
 };
-use std::{boxed::Box, vec::Vec};
+use std::{boxed::Box, string::ToString, vec::Vec};
 
 /// Optimism handler extends the [`Handler`] with Optimism specific logic.
 #[derive(Debug, Clone)]
@@ -203,7 +203,16 @@ where
             parent_gas,
             frame_result.gas_mut().tracker_mut(),
         );
-        if let Some(charge) = frame_result.refundable_state_gas(evm.ctx().cfg().gas_params()) {
+        if let Some(charge) = frame_result.refundable_state_gas_charge() {
+            // A failure the frame already recorded is returned first, so a failing refund lookup
+            // cannot overwrite it.
+            take_error::<Self::Error, _>(evm.ctx().error())?;
+            // Priced through the same hook the charge went through; the hook recorded the cause of
+            // a failed lookup.
+            let Some(charge) = evm.ctx().state_gas_charge(charge) else {
+                take_error::<Self::Error, _>(evm.ctx().error())?;
+                return Err(Self::Error::from_string("state gas price lookup failed".to_string()));
+            };
             parent_gas.refill_reservoir(charge);
             if instruction_result.is_halt() {
                 parent_gas.spend_all();
