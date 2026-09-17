@@ -1,0 +1,8 @@
+# The port in src/handler.rs targets the MegaETH fork of revm (the revm 43 gas
+# core cherry-picked on top of 40.0.3); crates.io revm 40.0.3 does not have
+# that API. Cargo.toml keeps the upstream requirement so the crate stays a
+# drop-in for the monorepo package; this repository-level patch is what
+# builds and tests it here. Consumers redirect `revm` (all twelve fork
+# crates) and `op-revm` in their own workspace, see MEGAETH-FORK.md.
+[patch.crates-io]
+revm = { git = "https://github.com/megaeth-labs/revm", rev = "87543e44787ba8bee0b56b79d32b0ec1ff407168" }
