@@ -91,9 +91,9 @@ const fn hash(v: u32) -> u16 {
 }
 
 fn u24(input: &[u8], idx: u32) -> u32 {
-    u32::from(input[idx as usize]) +
-        (u32::from(input[(idx + 1) as usize]) << 8) +
-        (u32::from(input[(idx + 2) as usize]) << 16)
+    u32::from(input[idx as usize])
+        + (u32::from(input[(idx + 1) as usize]) << 8)
+        + (u32::from(input[(idx + 2) as usize]) << 16)
 }
 
 #[cfg(test)]
