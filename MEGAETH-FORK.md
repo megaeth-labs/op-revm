@@ -10,7 +10,8 @@ The crate name and version stay `op-revm 20.0.0`; consumers switch to the fork t
 MegaETH's execution engine runs on the [MegaETH fork of revm](https://github.com/megaeth-labs/revm), which carries the revm 43 gas core on top of revm 40.0.3.
 That gas core changed the shape of two `Handler` methods that `OpHandler` overrides (`last_frame_result` and `refund`) and the signature of `Gas::set_final_refund`, which the `refund` override calls; the monorepo copy of `op-revm` pins an older revm with no port.
 The crates.io package `op-revm 20.0.0` is a different package under the same name and version (published from an older monorepo commit, depends on revm 38, maps `INTEROP` to `PRAGUE`) and is not compatible either.
-This fork is the monorepo copy plus that port, and nothing else: MegaETH logic stays in `mega-evm`.
+The revm fork also binds precompiles defined outside it: its `Precompile::required_gas` answers a call's price before the call runs, and a precompile that wraps one of revm's runs must price itself from the run it wraps (see "Precompile prices").
+This fork is the monorepo copy plus that port and those prices, and nothing else: MegaETH logic stays in `mega-evm`.
 
 ## Baseline
 
@@ -38,7 +39,7 @@ The baseline moves when `mega-reth` moves its OP monorepo revision.
    Do not change existing signatures, remove items, add trait methods without a default body, or rename features.
    `mega-evm`, `mega-reth` and `alloy-op-evm` are compiled against this fork; a change that must break the API says so in the PR and lands together with the consumer change.
 2. **Only what the revm fork requires.**
-   Upstream code changes where the MegaETH fork of revm changed a `Handler` method that `OpHandler` overrides, and nowhere else.
+   Upstream code changes where the MegaETH fork of revm changed a `Handler` method that `OpHandler` overrides, or where its contract binds a definition this crate makes (the precompile price, see "Precompile prices"), and nowhere else.
    An OP behaviour change belongs upstream; a MegaETH decision belongs in `mega-evm`.
 3. **Cargo versions never change.**
    `[patch]` only applies when the patched version satisfies the consumer's requirement.
@@ -73,12 +74,23 @@ op-revm = { git = "https://github.com/megaeth-labs/op-revm", tag = "v20.0.0-mega
 
 `Cargo.lock` records the resolved source; commit it, so a workspace that loses the patch fails to build instead of silently resolving the monorepo copy.
 
+## Precompile prices
+
+The revm fork's `Precompile::required_gas(input)` answers the gas a call needs before it runs; its `MEGAETH-FORK.md` ("Precompile price") holds the contract.
+Every precompile revm defines answers; one built with `Precompile::new` alone answers `None`.
+The nine size-limited precompiles in `src/precompiles.rs` (`bn254_pair::{GRANITE, JOVIAN, KARST}` and `bls12_381::{ISTHMUS, JOVIAN}_{G1_MSM, G2_MSM, PAIRING}`) run a revm precompile behind an OP input size limit, so each carries a price function set with `with_required_gas`: the price of the run it wraps (`revm::precompile::required_gas`) for an input the limit accepts, and `0` for an input the limit refuses, because the limit is checked before any gas check.
+With them, every precompile of every set `OpPrecompiles` returns answers.
+
+`tests/required_gas.rs` is the guard: it runs each wrapper at gas limits below, at and above its price, on edge and random inputs and on lengths around every limit of its family, and fails when a price and its run disagree.
+A size-limited precompile that arrives with a new snapshot gets a price function and a row in that test's table.
+A change to `src/precompiles.rs` runs the test under every backend: the default set, `--all-features`, `--no-default-features --features std` (the arkworks BLS12-381 and BN254 paths), `std,blst` and `std,bn`.
+
 ## Moving to a new upstream snapshot
 
 1. Produce the snapshot tree from a monorepo clone at the new revision: `scripts/mega/mirror.sh <clone> <rev> <dir>`.
 2. Replace the crate files in a working tree with that tree (everything except the fork-owned files: `.github/`, `scripts/mega/`, `.cargo/`, the fork documents, `rustfmt.toml`, `rust-toolchain.toml`, `Cargo.lock`, `.gitignore`) and commit it as `Mirror op-revm@<short> from ethereum-optimism/optimism`, with the full commit id, date and crate version in the body.
    Update `scripts/mega/base.txt`, the baseline table above and `PROVENANCE.md` in the same commit.
-3. Replay the fork commits on top (`git diff <old snapshot>..<old main>` shows what they are; the port in `src/handler.rs` is re-applied against the pinned revm fork commit, or dropped if upstream ported the same revm line itself).
+3. Replay the fork commits on top (`git diff <old snapshot>..<old main>` shows what they are; the port in `src/handler.rs` is re-applied against the pinned revm fork commit, or dropped if upstream ported the same revm line itself; every size-limited precompile in the new `src/precompiles.rs` is priced, see "Precompile prices").
 4. Before opening the PR, run `scripts/mega/check-mirror.sh <clone>` and paste the result into the PR.
 5. Tag a release.
 
@@ -111,4 +123,5 @@ Tags cannot be moved or deleted (ruleset); a wrong tag is superseded by the next
 `ci.yml` runs on every pull request and on pushes to `main`: tests (default and all features), `no_std` checks on both riscv targets and clippy with `-Dwarnings` on the pinned toolchain, and fmt on the monorepo's nightly rustfmt; `ci success` gates the merge.
 
 Local equivalents: `cargo +$(cat scripts/mega/rustfmt-nightly.txt) fmt --all --check`, `cargo clippy --all-targets --all-features` with `RUSTFLAGS=-Dwarnings`, `cargo nextest run` and `cargo nextest run --all-features`, `cargo check --no-default-features --target riscv32imac-unknown-none-elf` (and riscv64).
+A change to `src/precompiles.rs` adds `cargo nextest run --test required_gas --no-default-features --features <set>` for `std`, `std,blst` and `std,bn`.
 Manual check for a mirror PR: `scripts/mega/check-mirror.sh <monorepo-clone>`.
