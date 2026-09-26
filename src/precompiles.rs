@@ -6,8 +6,8 @@ use revm::{
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInputs, InterpreterResult},
     precompile::{
-        self, EthPrecompileResult, Precompile, PrecompileHalt, PrecompileId, Precompiles, bn254,
-        eth_precompile_fn, modexp, secp256r1,
+        self, EthPrecompileResult, Precompile, PrecompileGasFn, PrecompileHalt, PrecompileId,
+        Precompiles, bn254, eth_precompile_fn, modexp, required_gas, secp256r1,
     },
     primitives::{Address, AddressSet, OnceLock, hardfork::SpecId},
 };
@@ -173,6 +173,13 @@ impl Default for OpPrecompiles {
     }
 }
 
+/// Prices a run behind an Optimism input size limit, for [`Precompile::required_gas`]: an input
+/// longer than `max_input_size` is refused before any gas check, so it needs no gas, and any other
+/// is priced by `price`, the price function of the run it reaches.
+fn size_limited_price(input: &[u8], max_input_size: usize, price: PrecompileGasFn) -> u64 {
+    if input.len() > max_input_size { 0 } else { price(input) }
+}
+
 /// Bn254 pair precompile.
 pub mod bn254_pair {
     use super::*;
@@ -181,7 +188,8 @@ pub mod bn254_pair {
     pub const GRANITE_MAX_INPUT_SIZE: usize = 112687;
     /// Bn254 pair precompile.
     pub const GRANITE: Precompile =
-        Precompile::new(PrecompileId::Bn254Pairing, bn254::pair::ADDRESS, granite_precompile);
+        Precompile::new(PrecompileId::Bn254Pairing, bn254::pair::ADDRESS, granite_precompile)
+            .with_required_gas(granite_required_gas);
 
     /// Run the bn254 pair precompile with Optimism input limit.
     pub fn run_pair_granite(input: &[u8], gas_limit: u64) -> EthPrecompileResult {
@@ -198,11 +206,16 @@ pub mod bn254_pair {
 
     eth_precompile_fn!(granite_precompile, run_pair_granite);
 
+    fn granite_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, GRANITE_MAX_INPUT_SIZE, required_gas::bn254_pair_istanbul)
+    }
+
     /// Max input size for the bn254 pair precompile.
     pub const JOVIAN_MAX_INPUT_SIZE: usize = 81_984;
     /// Bn254 pair precompile.
     pub const JOVIAN: Precompile =
-        Precompile::new(PrecompileId::Bn254Pairing, bn254::pair::ADDRESS, jovian_precompile);
+        Precompile::new(PrecompileId::Bn254Pairing, bn254::pair::ADDRESS, jovian_precompile)
+            .with_required_gas(jovian_required_gas);
 
     /// Run the bn254 pair precompile with Optimism input limit.
     pub fn run_pair_jovian(input: &[u8], gas_limit: u64) -> EthPrecompileResult {
@@ -219,11 +232,16 @@ pub mod bn254_pair {
 
     eth_precompile_fn!(jovian_precompile, run_pair_jovian);
 
+    fn jovian_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, JOVIAN_MAX_INPUT_SIZE, required_gas::bn254_pair_istanbul)
+    }
+
     /// Max input size for the bn254 pair precompile after the Karst hardfork.
     pub const KARST_MAX_INPUT_SIZE: usize = 57_600;
     /// Bn254 pair precompile after the Karst hardfork.
     pub const KARST: Precompile =
-        Precompile::new(PrecompileId::Bn254Pairing, bn254::pair::ADDRESS, karst_precompile);
+        Precompile::new(PrecompileId::Bn254Pairing, bn254::pair::ADDRESS, karst_precompile)
+            .with_required_gas(karst_required_gas);
 
     /// Run the bn254 pair precompile with the Karst input size limit.
     pub fn run_pair_karst(input: &[u8], gas_limit: u64) -> EthPrecompileResult {
@@ -239,6 +257,10 @@ pub mod bn254_pair {
     }
 
     eth_precompile_fn!(karst_precompile, run_pair_karst);
+
+    fn karst_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, KARST_MAX_INPUT_SIZE, required_gas::bn254_pair_istanbul)
+    }
 }
 
 /// `Bls12_381` precompile.
@@ -266,23 +288,29 @@ pub mod bls12_381 {
 
     /// G1 msm precompile.
     pub const ISTHMUS_G1_MSM: Precompile =
-        Precompile::new(PrecompileId::Bls12G1Msm, G1_MSM_ADDRESS, isthmus_g1_msm_precompile);
+        Precompile::new(PrecompileId::Bls12G1Msm, G1_MSM_ADDRESS, isthmus_g1_msm_precompile)
+            .with_required_gas(isthmus_g1_msm_required_gas);
     /// G2 msm precompile.
     pub const ISTHMUS_G2_MSM: Precompile =
-        Precompile::new(PrecompileId::Bls12G2Msm, G2_MSM_ADDRESS, isthmus_g2_msm_precompile);
+        Precompile::new(PrecompileId::Bls12G2Msm, G2_MSM_ADDRESS, isthmus_g2_msm_precompile)
+            .with_required_gas(isthmus_g2_msm_required_gas);
     /// Pairing precompile.
     pub const ISTHMUS_PAIRING: Precompile =
-        Precompile::new(PrecompileId::Bls12Pairing, PAIRING_ADDRESS, isthmus_pairing_precompile);
+        Precompile::new(PrecompileId::Bls12Pairing, PAIRING_ADDRESS, isthmus_pairing_precompile)
+            .with_required_gas(isthmus_pairing_required_gas);
 
     /// G1 msm precompile after the Jovian Hardfork.
     pub const JOVIAN_G1_MSM: Precompile =
-        Precompile::new(PrecompileId::Bls12G1Msm, G1_MSM_ADDRESS, jovian_g1_msm_precompile);
+        Precompile::new(PrecompileId::Bls12G1Msm, G1_MSM_ADDRESS, jovian_g1_msm_precompile)
+            .with_required_gas(jovian_g1_msm_required_gas);
     /// G2 msm precompile after the Jovian Hardfork.
     pub const JOVIAN_G2_MSM: Precompile =
-        Precompile::new(PrecompileId::Bls12G2Msm, G2_MSM_ADDRESS, jovian_g2_msm_precompile);
+        Precompile::new(PrecompileId::Bls12G2Msm, G2_MSM_ADDRESS, jovian_g2_msm_precompile)
+            .with_required_gas(jovian_g2_msm_required_gas);
     /// Pairing precompile after the Jovian Hardfork.
     pub const JOVIAN_PAIRING: Precompile =
-        Precompile::new(PrecompileId::Bls12Pairing, PAIRING_ADDRESS, jovian_pairing_precompile);
+        Precompile::new(PrecompileId::Bls12Pairing, PAIRING_ADDRESS, jovian_pairing_precompile)
+            .with_required_gas(jovian_pairing_required_gas);
 
     eth_precompile_fn!(isthmus_g1_msm_precompile, run_g1_msm_isthmus);
     eth_precompile_fn!(isthmus_g2_msm_precompile, run_g2_msm_isthmus);
@@ -290,6 +318,25 @@ pub mod bls12_381 {
     eth_precompile_fn!(jovian_g1_msm_precompile, run_g1_msm_jovian);
     eth_precompile_fn!(jovian_g2_msm_precompile, run_g2_msm_jovian);
     eth_precompile_fn!(jovian_pairing_precompile, run_pair_jovian);
+
+    fn isthmus_g1_msm_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, ISTHMUS_G1_MSM_MAX_INPUT_SIZE, required_gas::bls12_g1_msm)
+    }
+    fn isthmus_g2_msm_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, ISTHMUS_G2_MSM_MAX_INPUT_SIZE, required_gas::bls12_g2_msm)
+    }
+    fn isthmus_pairing_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, ISTHMUS_PAIRING_MAX_INPUT_SIZE, required_gas::bls12_pairing)
+    }
+    fn jovian_g1_msm_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, JOVIAN_G1_MSM_MAX_INPUT_SIZE, required_gas::bls12_g1_msm)
+    }
+    fn jovian_g2_msm_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, JOVIAN_G2_MSM_MAX_INPUT_SIZE, required_gas::bls12_g2_msm)
+    }
+    fn jovian_pairing_required_gas(input: &[u8]) -> u64 {
+        size_limited_price(input, JOVIAN_PAIRING_MAX_INPUT_SIZE, required_gas::bls12_pairing)
+    }
 
     /// Run the g1 msm precompile with Optimism input limit.
     pub fn run_g1_msm_isthmus(input: &[u8], gas_limit: u64) -> EthPrecompileResult {

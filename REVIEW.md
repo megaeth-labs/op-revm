@@ -7,7 +7,7 @@ This repository is MegaETH's fork of the `op-revm` crate, taken from `rust/op-re
 
 1. **Superset.** The public API of `op-revm` stays a superset of the upstream snapshot the fork is on.
    A PR that must break it says so and lands together with the consumer change (`mega-evm`, `mega-reth`).
-2. **Only what the revm fork requires.** The fork changes upstream code where the MegaETH fork of revm changed a `Handler` method that `OpHandler` overrides, and nowhere else.
+2. **Only what the revm fork requires.** The fork changes upstream code where the MegaETH fork of revm changed a `Handler` method that `OpHandler` overrides, or where its contract binds a definition this crate makes (the precompile price), and nowhere else.
    MegaETH semantics belong in `mega-evm`; an OP behaviour change belongs upstream.
 3. **`no_std`.** No unguarded `std::`, no new dependency that enables `std` by default.
    CI checks both riscv targets; the reviewer checks the intent.
@@ -20,6 +20,7 @@ This repository is MegaETH's fork of the `op-revm` crate, taken from `rust/op-re
 |---|---|
 | Snapshot | The snapshot commit's subject names the monorepo commit; `scripts/mega/base.txt` and `PROVENANCE.md` name the same commit; the PR body carries the output of `check-mirror.sh`; the fork commits were replayed on top; nothing MegaETH-specific rides in the snapshot commit |
 | Port | The change is forced by a `Handler` shape in the pinned revm fork commit; the OP rules it touches (deposit gas, refunds, operator fee) keep their behaviour, with a test for each path |
+| Precompile price | A size-limited precompile prices an input its limit accepts with the price function of the run it wraps and an input its limit refuses at `0`; it has a row in `tests/required_gas.rs`, run under every backend; the run itself is unchanged |
 | CI or docs | Workflows pin action SHAs; nothing requires a secret; the local equivalent of every job is documented |
 
 ## What not to ask for
