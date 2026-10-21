@@ -98,6 +98,9 @@ A change to `src/precompiles.rs` runs the test under every backend: the default 
 
 Bump the `rev` in `.cargo/config.toml`, fix whatever the new `Handler` shapes require in `src/handler.rs` (rule 2), and tag a release.
 
+`OpHandler::last_frame_result` settles the first frame through the revm fork's `revm::handler::execution::settle_first_frame`, the settlement mainnet's `last_frame_result` makes, and adds only the pre-Regolith deposit rule before it copies the gas into the frame's result; a step the revm fork adds to that settlement (the start-charge refund, say) reaches it without a port.
+The other overrides (`validate_env`, `validate_against_state_and_deduct_caller`, `reimburse_caller`, `refund`, `reward_beneficiary`, `execution_result`, `catch_error`) reimplement their mainnet method with the OP rules, `refund`, `execution_result` and `catch_error` by repeating its body: check each against what the new revm commit changed in the mainnet method it overrides.
+
 ## Release procedure
 
 Every release is a commit on `main` with green `ci success`.
