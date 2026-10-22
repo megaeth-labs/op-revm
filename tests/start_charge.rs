@@ -1,8 +1,8 @@
 //! The start charge of the transaction's frame through [`OpHandler`].
 //!
 //! A consumer of the revm fork that charges the transaction's gas for the transaction's frame
-//! before execution, in history gas and bytes of the byte pool, declares the refundable part on
-//! the first frame's input (`charged_start`). The settlement of the first frame refunds it whole
+//! before execution, in history gas and an amount of one of its pools, declares the refundable part
+//! on the first frame's input (`charged_start`). The settlement of the first frame refunds it whole
 //! when the frame reverts or halts, and after a halt consumes the regular gas the refund credited;
 //! a frame that succeeds keeps it. `OpHandler` overrides that settlement (`last_frame_result`) for
 //! its pre-Regolith deposit rule, so it must make the refund too.
@@ -23,7 +23,10 @@ use revm::{
     context_interface::{ContextTr, Database, JournalTr, cfg::gas::GasTracker},
     database::InMemoryDB,
     handler::{EthFrame, EvmTr, Handler},
-    interpreter::{FrameInput, InstructionResult, StartCharge, interpreter::EthInterpreter},
+    interpreter::{
+        FrameInput, InstructionResult, PoolAmounts, PoolId, StartCharge,
+        interpreter::EthInterpreter,
+    },
     primitives::{Address, Bytes, TxKind, U256, address},
     state::{AccountInfo, Bytecode},
 };
@@ -43,7 +46,9 @@ const GAS_LIMIT: u64 = 1_000_000;
 const POOL: u64 = 1_000;
 /// What the consumer charges the transaction's gas for its frame and declares on the frame's
 /// input.
-const CHARGE: StartCharge = StartCharge::new(3_520, 160);
+/// The pool the consumer draws: any of the tracker's pools behaves the same.
+const FIRST: PoolId = PoolId::new(0);
+const CHARGE: StartCharge = StartCharge::new(3_520, PoolAmounts::ZERO.with(FIRST, 160));
 /// What `PUSH1 0 PUSH1 0 REVERT` spends.
 const REVERT_GAS: u64 = 6;
 
@@ -80,7 +85,7 @@ impl End {
 type Settled = (u64, i64, i64, u64);
 
 const fn settled(gas: &GasTracker) -> Settled {
-    (gas.bytes_remaining(), gas.bytes_spent(), gas.history_gas_spent(), gas.remaining())
+    (gas.pool_remaining(FIRST), gas.pool_spent(FIRST), gas.history_gas_spent(), gas.remaining())
 }
 
 /// What the transaction's gas settles to when its frame ends as `end`, from the regular gas
@@ -90,8 +95,8 @@ const fn settled(gas: &GasTracker) -> Settled {
 const fn expected(end: End, before: u64) -> Settled {
     match end {
         End::Stops => (
-            POOL - CHARGE.bytes,
-            CHARGE.bytes as i64,
+            POOL - CHARGE.pools.get(FIRST),
+            CHARGE.pools.get(FIRST) as i64,
             CHARGE.history as i64,
             before - CHARGE.history,
         ),
@@ -162,9 +167,9 @@ fn settle(ctx: OpContext<Db>) -> (InstructionResult, GasTracker, u64) {
     // The consumer's part, as it charges the transaction's body: the transaction's pool, and its
     // frame's charge on the transaction's gas.
     let before = gas.remaining();
-    gas.set_bytes_remaining(POOL);
+    gas.set_pool_remaining(FIRST, POOL);
     assert!(gas.record_history_cost(CHARGE.history));
-    assert!(gas.record_bytes(CHARGE.bytes));
+    assert!(gas.record_pool(FIRST, CHARGE.pools.get(FIRST)));
 
     // The consumer's part, as its `first_frame_input` makes it: the charge declared on the input.
     let mut init = handler
