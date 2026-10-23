@@ -12,7 +12,7 @@ use revm::{
         result::InvalidTransaction,
     },
     context_interface::{
-        Block, Cfg, ContextTr, Host, JournalTr, Transaction,
+        Block, Cfg, ContextTr, JournalTr, Transaction,
         cfg::gas::GasTracker,
         context::take_error,
         result::{EVMError, ExecutionResult, FromStringError, ResultGas},
@@ -20,7 +20,7 @@ use revm::{
     handler::{
         EthFrame, EvmTr, FrameResult, Handler, MainnetHandler,
         evm::FrameTr,
-        handle_reservoir_remaining_gas,
+        execution::settle_first_frame,
         handler::EvmTrError,
         post_execution::{self, reimburse_caller},
         pre_execution::{calculate_caller_fee, validate_account_nonce_and_code_with_components},
@@ -29,7 +29,7 @@ use revm::{
     interpreter::{InitialAndFloorGas, interpreter::EthInterpreter, interpreter_action::FrameInit},
     primitives::U256,
 };
-use std::{boxed::Box, string::ToString, vec::Vec};
+use std::{boxed::Box, vec::Vec};
 
 /// Optimism handler extends the [`Handler`] with Optimism specific logic.
 #[derive(Debug, Clone)]
@@ -196,28 +196,10 @@ where
         let is_regolith = ctx.cfg().spec().is_enabled_in(OpSpecId::REGOLITH);
         let instruction_result = frame_result.instruction_result();
 
-        // Mainnet settle (mirror of `Handler::last_frame_result`).
-        parent_gas.spend_all();
-        handle_reservoir_remaining_gas(
-            instruction_result,
-            parent_gas,
-            frame_result.gas_mut().tracker_mut(),
-        );
-        if let Some(charge) = frame_result.refundable_state_gas_charge() {
-            // A failure the frame already recorded is returned first, so a failing refund lookup
-            // cannot overwrite it.
-            take_error::<Self::Error, _>(evm.ctx().error())?;
-            // Priced through the same hook the charge went through; the hook recorded the cause of
-            // a failed lookup.
-            let Some(charge) = evm.ctx().state_gas_charge(charge) else {
-                take_error::<Self::Error, _>(evm.ctx().error())?;
-                return Err(Self::Error::from_string("state gas price lookup failed".to_string()));
-            };
-            parent_gas.refill_reservoir(charge);
-            if instruction_result.is_halt() {
-                parent_gas.spend_all();
-            }
-        }
+        // Mainnet settle: the revm fork's settlement of the first frame, which
+        // `Handler::last_frame_result` makes too, refunds included. The copy into the frame
+        // result is left to the end, after the Optimism rule.
+        settle_first_frame::<_, Self::Error>(evm.ctx(), frame_result, parent_gas)?;
 
         // Optimism: pre-Regolith deposit transactions are pre-paid on L1 and
         // report the gas limit as usage with no refunds; pre-Regolith *system*
@@ -545,8 +527,12 @@ mod tests {
             assert!(parent_gas.record_state_cost(ctx.cfg().gas_params().create_state_gas()));
         }
 
+        // The first frame takes the whole reservoir and every pool out of the transaction's gas,
+        // as revm's `create_init_frame` does, and the settlement adds back what it left.
+        let shares = parent_gas.forward_all_to_child();
         let mut gas =
-            Gas::new_with_regular_gas_and_reservoir(parent_gas.remaining(), parent_gas.reservoir());
+            Gas::new_with_regular_gas_and_reservoir(parent_gas.remaining(), shares.reservoir);
+        gas.tracker_mut().set_pools_remaining(shares.pools);
         if address.is_some() {
             spend_init_code_gas(&mut gas);
         }
