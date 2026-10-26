@@ -20,7 +20,7 @@ This repository is MegaETH's fork of the `op-revm` crate, taken from `rust/op-re
 |---|---|
 | Snapshot | The snapshot commit's subject names the monorepo commit; `scripts/mega/base.txt` and `PROVENANCE.md` name the same commit; the PR body carries the output of `check-mirror.sh`; the fork commits were replayed on top; nothing MegaETH-specific rides in the snapshot commit |
 | Port | The change is forced by a `Handler` shape in the pinned revm fork commit; the OP rules it touches (deposit gas, refunds, operator fee) keep their behaviour, with a test for each path |
-| Lifecycle call | Each `OpHandler` override of a boundary that closes the revm fork's start lifecycle (`last_frame_result`, `execution_result`, `catch_error`) calls the helper where the mainnet method does and passes what it passes; a test under `OpHandler` fails when the call is removed; nothing else in the override changes |
+| Lifecycle call | Each `OpHandler` override of a boundary that closes the revm fork's start lifecycle (`last_frame_result`, `execution_result`, `catch_error`) calls the helper where the mainnet method does and passes what it passes (`discard_transaction` is the first statement of `catch_error`); a test under `OpHandler` fails when the call is removed; nothing else in the override changes |
 | Precompile price | A size-limited precompile prices an input its limit accepts with the price function of the run it wraps and an input its limit refuses at `0`; it has a row in `tests/required_gas.rs`, run under every backend; the run itself is unchanged |
 | CI or docs | Workflows pin action SHAs; nothing requires a secret; the local equivalent of every job is documented |
 

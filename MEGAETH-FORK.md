@@ -104,7 +104,7 @@ Bump the `rev` in `.cargo/config.toml`, fix whatever the new `Handler` shapes re
 The revm fork's start lifecycle ends at the transaction boundaries, and `OpHandler` overrides the three that close it, so each override makes the call its mainnet method makes, in the same place:
 - `last_frame_result` closes the transaction's start right after `settle_first_frame` (`revm::handler::lifecycle::close_transaction_start`, given the reservoir the caller's gas held before the settlement), before the pre-Regolith deposit rule;
 - `execution_result` ends the lifecycle after `take_error` and before it builds the output (`lifecycle::finish_transaction`): a start still open fails the transaction with a fatal error, and a halted deposit has settled before it becomes a failed deposit;
-- `catch_error` discards the lifecycle in the cleanup every error reaches, the failed-deposit branch included, before `frame_stack().clear()` (`lifecycle::discard_transaction`).
+- `catch_error` discards the lifecycle first, as the mainnet method does (`lifecycle::discard_transaction` is its first statement), so every path out reaches it, the failed-deposit branch's early return included.
 
 A repin checks each call against the mainnet method it mirrors; a lifecycle helper the revm fork adds to a mainnet method that `OpHandler` overrides is called the same way.
 Code here that runs a first frame by hand, such as the unit tests' first-frame helper, opens the transaction's start first (`lifecycle::open_transaction_start`).
