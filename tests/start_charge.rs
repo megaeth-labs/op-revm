@@ -22,7 +22,7 @@ use revm::{
     context::{CfgEnv, TxEnv, result::EVMError},
     context_interface::{ContextTr, Database, JournalTr, cfg::gas::GasTracker},
     database::InMemoryDB,
-    handler::{EthFrame, EvmTr, Handler},
+    handler::{EthFrame, EvmTr, Handler, lifecycle},
     interpreter::{
         FrameInput, InstructionResult, PoolAmounts, PoolId, StartCharge,
         interpreter::EthInterpreter,
@@ -182,6 +182,8 @@ fn settle(ctx: OpContext<Db>) -> (InstructionResult, GasTracker, u64) {
         FrameInput::Empty => unreachable!("the first frame is a call or a creation"),
     }
     evm.ctx().journal_mut().checkpoint_commit();
+    // The transaction's start opens with its frame's init, as `Handler::execution` opens it.
+    lifecycle::open_frame_start(&mut evm, &init).expect("the start opens");
 
     let mut result = handler.run_exec_loop(&mut evm, init).expect("the frame runs");
     handler.last_frame_result(&mut evm, &mut result, &mut gas).expect("the frame settles");

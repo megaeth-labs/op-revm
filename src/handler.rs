@@ -22,6 +22,7 @@ use revm::{
         evm::FrameTr,
         execution::settle_first_frame,
         handler::EvmTrError,
+        lifecycle,
         post_execution::{self, reimburse_caller},
         pre_execution::{calculate_caller_fee, validate_account_nonce_and_code_with_components},
     },
@@ -197,9 +198,12 @@ where
         let instruction_result = frame_result.instruction_result();
 
         // Mainnet settle: the revm fork's settlement of the first frame, which
-        // `Handler::last_frame_result` makes too, refunds included. The copy into the frame
-        // result is left to the end, after the Optimism rule.
+        // `Handler::last_frame_result` makes too, refunds included, and the close of the
+        // transaction's start that follows it there. The copy into the frame result is left to
+        // the end, after the Optimism rule.
+        let held_reservoir = parent_gas.reservoir();
         settle_first_frame::<_, Self::Error>(evm.ctx(), frame_result, parent_gas)?;
+        lifecycle::close_transaction_start(evm, frame_result, parent_gas, held_reservoir)?;
 
         // Optimism: pre-Regolith deposit transactions are pre-paid on L1 and
         // report the gas limit as usage with no refunds; pre-Regolith *system*
@@ -311,6 +315,9 @@ where
         result_gas: ResultGas,
     ) -> Result<ExecutionResult<Self::HaltReason>, Self::Error> {
         take_error::<Self::Error, _>(evm.ctx().error())?;
+        // Mainnet: the revm fork's successful boundary of the start lifecycle. A halted deposit
+        // has settled its start by now, before it becomes a failed deposit below.
+        lifecycle::finish_transaction(evm)?;
 
         let exec_result = post_execution::output(evm.ctx(), frame_result, result_gas)
             .map_haltreason(OpHaltReason::Base);
@@ -337,6 +344,9 @@ where
         evm: &mut Self::Evm,
         error: Self::Error,
     ) -> Result<ExecutionResult<Self::HaltReason>, Self::Error> {
+        // Mainnet: the revm fork's fatal boundary of the start lifecycle, first, as
+        // `Handler::catch_error` makes it, so every path out of here has made it.
+        lifecycle::discard_transaction(evm);
         let is_deposit = evm.ctx().tx().tx_type() == DEPOSIT_TRANSACTION_TYPE;
         let is_tx_error = error.is_tx_error();
         let mut output = Err(error);
@@ -452,6 +462,8 @@ mod tests {
             OpHandler::<_, EVMError<_, OpTransactionError>, EthFrame<EthInterpreter>>::new();
 
         let mut parent_gas = GasTracker::new(gas_limit, gas_limit, 0);
+        // A first frame run by hand opens the transaction's start, as `Handler::execution` does.
+        revm::handler::lifecycle::open_transaction_start(&mut evm).unwrap();
         handler.last_frame_result(&mut evm, &mut exec_result, &mut parent_gas).unwrap();
         handler.refund(&mut evm, &mut exec_result, 0).unwrap();
         *exec_result.gas()
@@ -547,6 +559,8 @@ mod tests {
         let mut handler =
             OpHandler::<_, EVMError<_, OpTransactionError>, EthFrame<EthInterpreter>>::new();
 
+        // A first frame run by hand opens the transaction's start, as `Handler::execution` does.
+        revm::handler::lifecycle::open_transaction_start(&mut evm).unwrap();
         handler.last_frame_result(&mut evm, &mut exec_result, &mut parent_gas).unwrap();
         handler.refund(&mut evm, &mut exec_result, 0).unwrap();
         *exec_result.gas()
