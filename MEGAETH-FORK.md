@@ -100,7 +100,7 @@ A change to `src/precompiles.rs` runs the test under every backend: the default 
 
 Bump the `rev` in `.cargo/config.toml`, fix whatever the new `Handler` shapes require in `src/handler.rs` (rule 2), and tag a release.
 
-`OpHandler::last_frame_result` settles the first frame through the revm fork's `revm::handler::execution::settle_first_frame`, the settlement mainnet's `last_frame_result` makes, and adds only the pre-Regolith deposit rule before it copies the gas into the frame's result; a step the revm fork adds to that settlement (the start-charge refund, say) reaches it without a port.
+`OpHandler::last_frame_result` settles the first frame through the revm fork's `revm::handler::execution::settle_first_frame`, the settlement mainnet's `last_frame_result` makes, and adds only the pre-Regolith deposit rule before it copies the gas into the frame's result; a step the revm fork adds to that settlement reaches it without a port.
 The revm fork's start lifecycle ends at the transaction boundaries, and `OpHandler` overrides the three that close it, so each override makes the call its mainnet method makes, in the same place:
 - `last_frame_result` closes the transaction's start right after `settle_first_frame` (`revm::handler::lifecycle::close_transaction_start`, given the reservoir the caller's gas held before the settlement), before the pre-Regolith deposit rule;
 - `execution_result` ends the lifecycle after `take_error` and before it builds the output (`lifecycle::finish_transaction`): a start still open fails the transaction with a fatal error, and a halted deposit has settled before it becomes a failed deposit;
@@ -109,7 +109,6 @@ The revm fork's start lifecycle ends at the transaction boundaries, and `OpHandl
 A repin checks each call against the mainnet method it mirrors; a lifecycle helper the revm fork adds to a mainnet method that `OpHandler` overrides is called the same way.
 Code here that runs a first frame by hand, such as the unit tests' first-frame helper, opens the transaction's start first (`lifecycle::open_transaction_start`).
 The other overrides (`validate_env`, `validate_against_state_and_deduct_caller`, `reimburse_caller`, `refund`, `reward_beneficiary`, `execution_result`, `catch_error`) reimplement their mainnet method with the OP rules, `refund`, `execution_result` and `catch_error` by repeating its body (the last two with the lifecycle call above): check each against what the new revm commit changed in the mainnet method it overrides.
-The revm fork's settlement adds a returning frame's reservoir and pools to what its caller kept, and the caller gives up the child's shares when the child starts (`GasTracker::forward_to_child`; the first frame takes everything, `forward_all_to_child`). Code here that builds a frame's result by hand and settles it, such as the unit tests' first-frame helper, takes the shares from the caller's gas the same way, or the reservoir is counted twice.
 
 ## Release procedure
 
