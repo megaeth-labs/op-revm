@@ -539,12 +539,8 @@ mod tests {
             assert!(parent_gas.record_state_cost(ctx.cfg().gas_params().create_state_gas()));
         }
 
-        // The first frame takes the whole reservoir and every pool out of the transaction's gas,
-        // as revm's `create_init_frame` does, and the settlement adds back what it left.
-        let shares = parent_gas.forward_all_to_child();
         let mut gas =
-            Gas::new_with_regular_gas_and_reservoir(parent_gas.remaining(), shares.reservoir);
-        gas.tracker_mut().set_pools_remaining(shares.pools);
+            Gas::new_with_regular_gas_and_reservoir(parent_gas.remaining(), parent_gas.reservoir());
         if address.is_some() {
             spend_init_code_gas(&mut gas);
         }
