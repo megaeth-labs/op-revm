@@ -5,4 +5,4 @@
 # builds and tests it here. Consumers redirect `revm` (all twelve fork
 # crates) and `op-revm` in their own workspace, see MEGAETH-FORK.md.
 [patch.crates-io]
-revm = { git = "https://github.com/megaeth-labs/revm", rev = "87ded5c7c7ac009edc48033772e2e51bc6708aed" }
+revm = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
