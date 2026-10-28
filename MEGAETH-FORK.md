@@ -11,7 +11,8 @@ MegaETH's execution engine runs on the [MegaETH fork of revm](https://github.com
 That gas core changed the shape of two `Handler` methods that `OpHandler` overrides (`last_frame_result` and `refund`) and the signature of `Gas::set_final_refund`, which the `refund` override calls; the monorepo copy of `op-revm` pins an older revm with no port.
 The crates.io package `op-revm 20.0.0` is a different package under the same name and version (published from an older monorepo commit, depends on revm 38, maps `INTEROP` to `PRAGUE`) and is not compatible either.
 The revm fork also binds precompiles defined outside it: its `Precompile::required_gas` answers a call's price before the call runs, and a precompile that wraps one of revm's runs must price itself from the run it wraps (see "Precompile prices").
-This fork is the monorepo copy plus that port and those prices, and nothing else: MegaETH logic stays in `mega-evm`.
+The revm fork also keeps a start lifecycle that mainnet's transaction boundaries close, and `OpHandler` overrides three of those boundaries (`last_frame_result`, `execution_result` and `catch_error`): each override calls the revm fork's lifecycle helper where the mainnet method calls it (see "Following a new revm fork commit").
+This fork is the monorepo copy plus that port, those prices and those lifecycle calls, and nothing else: MegaETH logic stays in `mega-evm`.
 
 ## Baseline
 
@@ -39,7 +40,8 @@ The baseline moves when `mega-reth` moves its OP monorepo revision.
    Do not change existing signatures, remove items, add trait methods without a default body, or rename features.
    `mega-evm`, `mega-reth` and `alloy-op-evm` are compiled against this fork; a change that must break the API says so in the PR and lands together with the consumer change.
 2. **Only what the revm fork requires.**
-   Upstream code changes where the MegaETH fork of revm changed a `Handler` method that `OpHandler` overrides, or where its contract binds a definition this crate makes (the precompile price, see "Precompile prices"), and nowhere else.
+   Upstream code changes where the MegaETH fork of revm changed a `Handler` method that `OpHandler` overrides, where a mainnet `Handler` method that `OpHandler` overrides calls a revm fork helper the override must call too (the start lifecycle's `close_transaction_start`, `finish_transaction` and `discard_transaction`), or where its contract binds a definition this crate makes (the precompile price, see "Precompile prices"), and nowhere else.
+   Such a call sits where the mainnet method makes it, passes what that method passes, and decides nothing.
    An OP behaviour change belongs upstream; a MegaETH decision belongs in `mega-evm`.
 3. **Cargo versions never change.**
    `[patch]` only applies when the patched version satisfies the consumer's requirement.
@@ -97,6 +99,16 @@ A change to `src/precompiles.rs` runs the test under every backend: the default 
 ## Following a new revm fork commit
 
 Bump the `rev` in `.cargo/config.toml`, fix whatever the new `Handler` shapes require in `src/handler.rs` (rule 2), and tag a release.
+
+`OpHandler::last_frame_result` settles the first frame through the revm fork's `revm::handler::execution::settle_first_frame`, the settlement mainnet's `last_frame_result` makes, and adds only the pre-Regolith deposit rule before it copies the gas into the frame's result; a step the revm fork adds to that settlement reaches it without a port.
+The revm fork's start lifecycle ends at the transaction boundaries, and `OpHandler` overrides the three that close it, so each override makes the call its mainnet method makes, in the same place:
+- `last_frame_result` closes the transaction's start right after `settle_first_frame` (`revm::handler::lifecycle::close_transaction_start`, given the reservoir the caller's gas held before the settlement), before the pre-Regolith deposit rule;
+- `execution_result` ends the lifecycle after `take_error` and before it builds the output (`lifecycle::finish_transaction`): a start still open fails the transaction with a fatal error, and a halted deposit has settled before it becomes a failed deposit;
+- `catch_error` discards the lifecycle first, as the mainnet method does (`lifecycle::discard_transaction` is its first statement), so every path out reaches it, the failed-deposit branch's early return included.
+
+A repin checks each call against the mainnet method it mirrors; a lifecycle helper the revm fork adds to a mainnet method that `OpHandler` overrides is called the same way.
+Code here that runs a first frame by hand, such as the unit tests' first-frame helper, opens the transaction's start first (`lifecycle::open_transaction_start`).
+The other overrides (`validate_env`, `validate_against_state_and_deduct_caller`, `reimburse_caller`, `refund`, `reward_beneficiary`, `execution_result`, `catch_error`) reimplement their mainnet method with the OP rules, `refund`, `execution_result` and `catch_error` by repeating its body (the last two with the lifecycle call above): check each against what the new revm commit changed in the mainnet method it overrides.
 
 ## Release procedure
 
